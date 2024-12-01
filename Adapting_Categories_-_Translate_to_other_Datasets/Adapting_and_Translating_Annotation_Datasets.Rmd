@@ -1,0 +1,662 @@
+---
+title: "Adapting and Translating Annotation Datasets"
+author: "robert.rettig@dfki.de"
+date: "2024-11-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+library("rjson")
+library("sf")
+library("terra")
+library("dplyr")
+library("stringr")
+
+setwd(".")
+
+```
+
+This R Markdown file explains the steps necessary to adapt and transfer the JSON COCO Format to other categories and formats. This Script does not address necessary preprocessing steps to work with multiscale data. 
+It is recommended to use Open Source GIS Software like QGIS (https://qgis.org/), to georeference pictures and orthomosaics taken by drones (https://docs.qgis.org/3.34/en/docs/user_manual/working_with_raster/georeferencer.html), for further processing. 
+For satellite based images please consider AROSICS for coregistration (https://git.gfz-potsdam.de/danschef/arosics/). 
+
+This Markdown Script is using an example image from a field campaign which took place in summer 2024. The rest of the dataset will be published soon, so the scripts can be performed on multiple Images and Annotation files.
+
+Please make sure to install the following packages before running the script: "terra", "rjson", "sf", "dplyr", "stringr"
+
+```{r COCO Annotation and Image, include=TRUE}
+
+
+json_file <- 
+  "Example_File/JSON_COCO/annotations/instances_default.json"
+json_data <- rjson::fromJSON(file = json_file)
+json_data_edit <- json_data
+
+
+image <-
+  terra::rast("Example_File/JSON_COCO/images/2024-06-27_Plot_70.png")
+print(json_data_edit[["images"]][[1]][["file_name"]])
+
+terra::plot(image)
+```
+
+## Cluster annotations to binary classification
+This process converts the annotations to a binary classification system, where all annotations are grouped under a single category named "objects"
+
+```{r binary label, include=TRUE, echo=TRUE}
+
+for (n in seq_along(json_data_edit[["annotations"]])) {
+  json_data_edit[["annotations"]][[n]][["category_id"]] <- 1
+}
+
+# delete other categories, which are not further used
+json_data_edit[["categories"]][c(2:length(json_data_edit[["categories"]]))] <-
+  NULL
+
+# name the category according to the binary classification
+json_data_edit[["categories"]][[1]][["name"]] <- c('objects')
+
+# convert to JSON
+exportJson <- toJSON(json_data_edit)
+
+# Save the JSON to file
+write(exportJson, file = "Example_File/JSON_COCO/annotations/instances_default_binary.json")
+
+```
+
+## Create a binary raster mask 
+Based on the created binary annotations, herewith a binary raster mask and polygons is created, for further extraction of pixel values e.g. for pixel wise classifications. Please provide the world file (e.g. .aux.xml) or the georeferenced original *.tif to use the georeference information for further processing.
+
+```{r binary raster mask, echo=FALSE}
+
+
+json_file <-
+  "Example_File/JSON_COCO/annotations/instances_default_binary.json"
+json_data <- rjson::fromJSON(file = json_file)
+
+for (i in seq_along(json_data[["images"]])) {
+  #Name from JSON
+  name <- json_data[["images"]][[i]][["file_name"]]
+  image_id <- json_data[["images"]][[i]][["id"]]
+  
+  annotations_for_image_i <- c()
+  for (n in seq_along(json_data[["annotations"]])) {
+    if (json_data[["annotations"]][[n]][["image_id"]] == json_data[["images"]][[i]][["id"]]) {
+      annotations_for_image_i <- c(annotations_for_image_i, n)
+    }
+  }
+  
+  print(
+    paste0(
+      "Mask image: Nr.",
+      i,
+      ", with name: ",
+      name,
+      " and ID ",
+      image_id ,
+      ".",
+      " With a total of ",
+      length(annotations_for_image_i),
+      " annotations"
+    )
+  )
+  
+  # Parse the COCO image folder for the matching image
+  file.ls <- list.files(path = "Example_File/JSON_COCO/images/",
+                        pattern = json_data[["images"]][[i]][["file_name"]],
+                        full.names = T)
+  file.ls <- file.ls[!grepl("xml", file.ls, fixed = TRUE)]
+  
+  # Create a SpatRaster from image
+  pic <- terra::rast(file.ls)
+  # Reduce layers of the original image
+  pic_mask <- pic[[1]]
+  # Reset all pixel values, which are not NA to zero
+  pic_mask[!is.na(pic_mask)] <- c(0)
+  
+  # Reset extent and CRS
+  terra::ext(pic_mask) <-
+    terra::ext(0, json_data[["images"]][[i]][["width"]], 0, json_data[["images"]][[i]][["height"]])
+  #terra::crs(pic_mask) <- terra::crs(json_data[["images"]][[i]])
+  
+  #create Polygon from Positions
+  #summing all annotations for one image in a list
+  if (length(annotations_for_image_i) > 0) {
+    annotation_list <- list()
+    for (l in seq_along(annotations_for_image_i)) {
+      annotation_list$boundary[[l]] <-
+        matrix(round(as.numeric(c(
+          json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]],
+          json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]][1:2]
+        )), 0),
+        ncol = 2,
+        byrow = TRUE)
+      
+      #Use 1 for binary classification
+      annotation_list$label[[l]] <- c(1)
+      
+      #edit YMIN (if necessary)
+      annotation_list$boundary[[l]][, 2] <-
+        json_data[["images"]][[i]][["height"]] - annotation_list$boundary[[l]][, 2]
+      
+      # #edit XMIN (if necessary)
+      # annotation_list$boundary[[l]][,1] <- json_data[["images"]][[i]][["width"]] - annotation_list$boundary[[l]][,1]
+      
+      annotation_list$polygon[[l]] <-
+        st_polygon(list(annotation_list$boundary[[l]]))
+      
+      #convert to SpatVector
+      annotation_list$SpatVector[[l]] <-
+        terra::vect(annotation_list$polygon[[l]])
+      
+      annotation_list$extent[[l]] <- terra::ext(pic_mask)
+      annotation_list$crs[[l]] <- terra::crs(pic_mask)
+      
+      #mask image with annotation based polygon
+      pic_mask <-
+        terra::mask(
+          pic_mask,
+          annotation_list$SpatVector[[l]],
+          inverse = TRUE,
+          updatevalue = as.integer(annotation_list$label[[l]])
+        )
+    }
+  }
+  
+  #georeferencing the masked image back to the original image
+  terra::ext(pic_mask) <- terra::ext(pic)
+  terra::crs(pic_mask) <- terra::crs(pic)
+  
+  # to ensure NA's
+  pic_mask_na <- terra::mask(pic_mask, pic[[1]])
+  terra::plot(pic_mask_na)
+  
+  terra::writeRaster(
+    pic_mask_na,
+    filename = paste0("Example_File/Binary/",
+                      json_data[["images"]][[i]][["file_name"]]),
+    overwrite = TRUE
+  )
+  
+  # Convert raster to polygons
+  polygons <- as.polygons(pic_mask_na[[1]], values = TRUE)
+  
+  # Save the polygons to a shapefile
+  terra::writeVector(
+    polygons,
+    filename = paste0("Example_File/Binary/",
+                      json_data[["images"]][[i]][["file_name"]], ".shp"),
+    overwrite = TRUE
+  )
+}
+
+```
+
+## Cluster annotations to material type categories
+We created a prelimenary version of a LUT to address most common objects and material types, materials and usage. While clustering our annotations to material types, we will use this list and according ID's as guidance.
+
+```{r material type categories, include=FALSE, echo=FALSE}
+
+# Cluster Label into Material types Classes ####
+LUT <- read.csv(
+  "2024_11_05_DFKI_Categories_Multilist_LUT.csv",
+  sep = ";",
+  header = T,
+  na.strings = c("", "UNKNOWN")
+)
+
+materialtypes <- as.data.frame(LUT$Material.types)
+# add materialtype ID's
+materialtypes[, 2] <-
+  LUT[, which(colnames(LUT) == "Material.types") + 1]
+
+names(materialtypes) <- c("Materialtypes", "IDs")
+
+# cut unnecessary rows
+materialtypes <- materialtypes[complete.cases(materialtypes), ]
+
+
+```
+
+
+```{r match annotations, echo=FALSE}
+
+
+json_file <-
+  "Example_File/JSON_COCO/annotations/instances_default.json"
+json_data <- rjson::fromJSON(file = json_file)
+json_data_edit <- json_data
+
+# Create dataframe for categories of JSON file
+cluster_df <- as.data.frame(0)
+
+# Create dummy list for all categories
+cluster_df[1:length(json_data_edit[["categories"]]), 1] <- NA
+
+# Read label names and id's
+for (i in seq_along(json_data_edit[["categories"]])) {
+  cluster_df[i, 1] <- json_data_edit[["categories"]][[i]][["id"]]
+  cluster_df[i, 2] <- json_data_edit[["categories"]][[i]][["name"]]
+  cluster_df[i, 3:6] <- str_split_fixed(cluster_df[i, 2], "-", 4)
+}
+
+# create translation for category-ID's
+for (type in 1:nrow(materialtypes)) {
+  # compare only materialtypes
+  translate_type <-
+    which(tolower(cluster_df$V4) == tolower(materialtypes$Materialtypes[type]))
+  # assign LUT ID to original category ID
+  cluster_df[translate_type, 7] <- materialtypes[type, 2]
+}
+
+
+# cluster/edit label id by LUT material type ID's
+for (i in seq_along(json_data_edit[["annotations"]])) {
+  #any matching string in LUT (materialtype) -> replace with LUT[,2]
+  row_replacement <-
+    which(cluster_df[, 1] == json_data_edit[["annotations"]][[i]][["category_id"]])
+  json_data_edit[["annotations"]][[i]][["category_id"]] <-
+    cluster_df[row_replacement, 7]
+}
+
+# select only used types from annotation file
+used_types <- unique(cluster_df[, 7])
+
+for (i in 1:length(used_types)) {
+  json_data_edit[["categories"]][[i]][["name"]] <-
+    materialtypes[which(materialtypes[, 2] == used_types[i]), 1]
+  json_data_edit[["categories"]][[i]][["id"]] <-
+    materialtypes[which(materialtypes[, 2] == used_types[i]), 2]
+}
+
+# delete other categories, which are not further used
+json_data_edit[["categories"]][c(length(used_types) + 1:length(json_data_edit[["categories"]]))] <-
+  NULL
+
+# convert to JSON
+exportJson <- toJSON(json_data_edit)
+
+# Save the JSON to file
+write(exportJson, file = "Example_File/JSON_COCO/annotations/instances_default_materialtypes.json")
+print("Resulting materialtype categories for the annotation file: ")
+for (i in 1:length(json_data_edit[["categories"]])) {
+  print(json_data_edit[["categories"]][[i]][["name"]])
+}
+
+  
+```
+
+```{r masking with categories, echo=FALSE}
+  
+json_file <- "Example_File/JSON_COCO/annotations/instances_default_materialtypes.json"
+json_data <- fromJSON(file=json_file)
+  
+for (i in 1:length(json_data[["images"]])) {
+ 
+  #Name from JSON
+  name <- json_data[["images"]][[i]][["file_name"]]
+  image_id <- json_data[["images"]][[i]][["id"]]
+    
+  annotations_for_image_i <- c()
+  for (n in 1:length(json_data[["annotations"]])) {
+    if (json_data[["annotations"]][[n]][["image_id"]] == json_data[["images"]][[i]][["id"]]){
+      annotations_for_image_i <- c(annotations_for_image_i, n)
+    }
+  }
+    
+  print(paste0("Mask image: Nr.",i,", with name: ",name," and ID ", image_id ,".",
+                " With a total of ", length(annotations_for_image_i), " annotations"))
+    
+  # Parse the COCO image folder for the matching image
+  file.ls <- list.files(path="Example_File/JSON_COCO/images/", 
+                        pattern=json_data[["images"]][[i]][["file_name"]], full.names=T)
+  file.ls <- file.ls[!grepl("xml", file.ls, fixed = TRUE)]
+
+  # Create a SpatRaster from image
+  pic <- terra::rast(file.ls)
+  # Reduce layers of the original image
+  pic_mask <- pic[[1]]
+  # Reset all pixel values, which are not NA to zero
+  pic_mask[!is.na(pic_mask)] <- c(0)
+
+  # Reset extent and CRS
+  terra::ext(pic_mask) <- terra::ext(0, json_data[["images"]][[i]][["width"]], 0, json_data[["images"]][[i]][["height"]])
+  #terra::crs(pic_mask) <- terra::crs(json_data[["images"]][[i]])
+    
+  # Create Polygon from Positions
+  # summing all annotations for one image in a list
+  if (length(annotations_for_image_i) > 0) {
+  annotation_list <- list()
+    for (l in 1:length(annotations_for_image_i)){
+      annotation_list$boundary[[l]] <- matrix(round(as.numeric(c(json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]], 
+                                                                  json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]][1:2])),0), 
+                                              ncol=2, byrow=TRUE)
+
+      # Categorical masking
+      annotation_list$label[[l]] <- json_data[["annotations"]][[annotations_for_image_i[l]]][["category_id"]]
+        
+      # edit YMIN (if necessary)
+      annotation_list$boundary[[l]][,2] <- json_data[["images"]][[i]][["height"]] - annotation_list$boundary[[l]][,2]
+        
+      # #edit XMIN (if necessary)
+      # annotation_list$boundary[[l]][,1] <- json_data[["images"]][[i]][["width"]] - annotation_list$boundary[[l]][,1]
+      
+      annotation_list$polygon[[l]] <- st_polygon(list(annotation_list$boundary[[l]]))
+      
+      #convert to SpatVector
+      annotation_list$SpatVector[[l]] <- terra::vect(annotation_list$polygon[[l]])
+      
+      annotation_list$extent[[l]] <- terra::ext(pic_mask)
+      annotation_list$crs[[l]] <- terra::crs(pic_mask)
+        
+      #mask image with annotation based polygon
+      pic_mask <- terra::mask(pic_mask, annotation_list$SpatVector[[l]], inverse=TRUE, 
+                              updatevalue= as.integer(annotation_list$label[[l]])) 
+      }
+    } 
+    
+  # georeferencing the masked image back to the original image
+  terra::ext(pic_mask) <- terra::ext(pic)
+  terra::crs(pic_mask) <- terra::crs(pic)
+    
+  # to ensure NA's
+  pic_mask_na <- terra::mask(pic_mask, pic[[1]])
+  terra::plot(pic_mask_na)
+   
+  terra::writeRaster(pic_mask_na, filename=paste0(
+    "Example_File/Materialtypes/",
+    json_data[["images"]][[i]][["file_name"]]),
+    overwrite=TRUE)
+    
+  # Convert raster to polygons
+  polygons <- as.polygons(pic_mask_na[[1]], values = TRUE)
+    
+  # Save the polygons to a shapefile
+  terra::writeVector(polygons, filename=paste0(
+    "Example_File/Materialtypes/",
+    json_data[["images"]][[i]][["file_name"]],".shp"),
+    overwrite=TRUE)
+  }
+  
+
+
+```
+
+## For Panoptic Segmentation: Create a unique ID for each instance of the materialtype categorie
+For the panoptic segmentation, a layer of the initial annotated categories is needed, as well as a layer, for unique identification of each instance.
+
+```{r mask for unique panoptic categories, echo=FALSE}
+
+json_file <-
+  "Example_File/JSON_COCO/annotations/instances_default_materialtypes.json"
+json_data <- fromJSON(file = json_file)
+
+
+for (i in 1:length(json_data[["images"]])) {
+  #Name from JSON
+  name <- json_data[["images"]][[i]][["file_name"]]
+  image_id <- json_data[["images"]][[i]][["id"]]
+  
+  annotations_for_image_i <- c()
+  for (n in 1:length(json_data[["annotations"]])) {
+    if (json_data[["annotations"]][[n]][["image_id"]] == json_data[["images"]][[i]][["id"]]) {
+      annotations_for_image_i <- c(annotations_for_image_i, n)
+    }
+  }
+  
+  print(
+    paste0(
+      "Mask image: Nr.",
+      i,
+      ", with name: ",
+      name,
+      " and ID ",
+      image_id ,
+      ".",
+      " With a total of ",
+      length(annotations_for_image_i),
+      " annotations"
+    )
+  )
+  
+  # Parse the COCO image folder for the matching image
+  file.ls <- list.files(path = "Example_File/JSON_COCO/images/",
+                        pattern = json_data[["images"]][[i]][["file_name"]],
+                        full.names = T)
+  file.ls <- file.ls[!grepl("xml", file.ls, fixed = TRUE)]
+  
+  # Create a SpatRaster from image
+  pic <- terra::rast(file.ls)
+  # Reduce layers of the original image
+  pic_mask <- pic[[c(1, 2)]]
+  # Reset all pixel values, which are not NA to zero
+  pic_mask[!is.na(pic_mask)] <- c(0)
+  
+  # Reset extent and CRS
+  terra::ext(pic_mask) <-
+    terra::ext(0, json_data[["images"]][[i]][["width"]], 0, json_data[["images"]][[i]][["height"]])
+  #terra::crs(pic_mask) <- terra::crs(json_data[["images"]][[i]])
+  
+  # Create Polygon from Positions
+  # summing all annotations for one image in a list
+  if (length(annotations_for_image_i) > 0) {
+    annotation_list <- list()
+    for (l in 1:length(annotations_for_image_i)) {
+      annotation_list$boundary[[l]] <-
+        matrix(round(as.numeric(c(
+          json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]],
+          json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]][1:2]
+        )), 0),
+        ncol = 2,
+        byrow = TRUE)
+      
+      # Categorical masking
+      annotation_list$label[[l]] <-
+        json_data[["annotations"]][[annotations_for_image_i[l]]][["category_id"]]
+      
+      # edit YMIN (if necessary)
+      annotation_list$boundary[[l]][, 2] <-
+        json_data[["images"]][[i]][["height"]] - annotation_list$boundary[[l]][,2]
+      
+      # #edit XMIN (if necessary)
+      # annotation_list$boundary[[l]][,1] <- json_data[["images"]][[i]][["width"]] - annotation_list$boundary[[l]][,1]
+      
+      annotation_list$polygon[[l]] <-
+        st_polygon(list(annotation_list$boundary[[l]]))
+      
+      #convert to SpatVector
+      annotation_list$SpatVector[[l]] <-
+        terra::vect(annotation_list$polygon[[l]])
+      
+      annotation_list$extent[[l]] <- terra::ext(pic_mask)
+      annotation_list$crs[[l]] <- terra::crs(pic_mask)
+      
+      pic_mask_1 <-
+        terra::mask(
+          pic_mask[[1]],
+          annotation_list$SpatVector[[l]],
+          inverse = TRUE,
+          updatevalue = as.integer(annotation_list$label[[l]])
+        )
+      
+      # create unique identifier for each instance by multiplying label ID with Instance ID
+      pic_mask_2 <-
+        terra::mask(
+          pic_mask[[2]],
+          annotation_list$SpatVector[[l]],
+          inverse = TRUE,
+          updatevalue = c(l)
+        )
+      
+      pic_mask <- c(pic_mask_1, pic_mask_2)
+      
+    }
+  }
+  
+  terra::ext(pic_mask) <- terra::ext(pic)
+  terra::crs(pic_mask) <- terra::crs(pic)
+  
+  # to ensure NA's
+  pic_mask_na <- terra::mask(pic_mask, pic[[1]])
+  terra::plot(pic_mask_na[[2]])
+  
+  terra::writeRaster(
+    pic_mask_na,
+    filename = paste0("Example_File/Panoptic/", 
+                      json_data[["images"]][[i]][["file_name"]]),
+    overwrite = TRUE
+  )
+}
+
+```
+
+
+## For Tilewise Classification: Create a tile for the dominant materialtype 
+For the panoptic segmentation, a layer of the initial annotated categories is needed, as well as a layer, for unique identification of each instance.
+
+```{r mask for unique panoptic categories ---, echo=FALSE}
+
+
+json_file <- "Example_File/JSON_COCO/annotations/instances_default_materialtypes.json"
+json_data <- fromJSON(file=json_file)
+  
+for (i in 1:length(json_data[["images"]])) {
+ 
+  #Name from JSON
+  name <- json_data[["images"]][[i]][["file_name"]]
+  image_id <- json_data[["images"]][[i]][["id"]]
+    
+  annotations_for_image_i <- c()
+  for (n in 1:length(json_data[["annotations"]])) {
+    if (json_data[["annotations"]][[n]][["image_id"]] == json_data[["images"]][[i]][["id"]]){
+      annotations_for_image_i <- c(annotations_for_image_i, n)
+    }
+  }
+    
+  print(paste0("Mask image: Nr.",i,", with name: ",name," and ID ", image_id ,".",
+                " With a total of ", length(annotations_for_image_i), " annotations"))
+    
+  # Parse the COCO image folder for the matching image
+  file.ls <- list.files(path="Example_File/JSON_COCO/images/", 
+                        pattern=json_data[["images"]][[i]][["file_name"]], full.names=T)
+  file.ls <- file.ls[!grepl("xml", file.ls, fixed = TRUE)]
+
+  # Create a SpatRaster from image
+  pic <- terra::rast(file.ls)
+  # Reduce layers of the original image
+  pic_mask <- pic[[1]]
+  # Reset all pixel values, which are not NA to zero
+  pic_mask[!is.na(pic_mask)] <- c(0)
+
+  # Reset extent and CRS
+  terra::ext(pic_mask) <- terra::ext(0, json_data[["images"]][[i]][["width"]], 0, json_data[["images"]][[i]][["height"]])
+  #terra::crs(pic_mask) <- terra::crs(json_data[["images"]][[i]])
+    
+  # Create Polygon from Positions
+  # summing all annotations for one image in a list
+  if (length(annotations_for_image_i) > 0) {
+  annotation_list <- list()
+    for (l in 1:length(annotations_for_image_i)){
+      annotation_list$boundary[[l]] <- matrix(round(as.numeric(c(json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]], 
+                                                                  json_data[["annotations"]][[annotations_for_image_i[l]]][["segmentation"]][[1]][1:2])),0), 
+                                              ncol=2, byrow=TRUE)
+
+      # Categorical masking
+      annotation_list$label[[l]] <- json_data[["annotations"]][[annotations_for_image_i[l]]][["category_id"]]
+        
+      # edit YMIN (if necessary)
+      annotation_list$boundary[[l]][,2] <- json_data[["images"]][[i]][["height"]] - annotation_list$boundary[[l]][,2]
+        
+      # #edit XMIN (if necessary)
+      # annotation_list$boundary[[l]][,1] <- json_data[["images"]][[i]][["width"]] - annotation_list$boundary[[l]][,1]
+      
+      annotation_list$polygon[[l]] <- st_polygon(list(annotation_list$boundary[[l]]))
+      
+      #convert to SpatVector
+      annotation_list$SpatVector[[l]] <- terra::vect(annotation_list$polygon[[l]])
+      
+      annotation_list$extent[[l]] <- terra::ext(pic_mask)
+      annotation_list$crs[[l]] <- terra::crs(pic_mask)
+        
+      #mask image with annotation based polygon
+      pic_mask <- terra::mask(pic_mask, annotation_list$SpatVector[[l]], inverse=TRUE, 
+                              updatevalue= as.integer(annotation_list$label[[l]])) 
+      }
+    } 
+    
+  #georeferencing the masked image back to the original image
+  terra::ext(pic_mask) <- terra::ext(pic)
+  terra::crs(pic_mask) <- terra::crs(pic)
+    
+  # to ensure NA's
+  pic_mask_na <- terra::mask(pic_mask, pic[[1]])
+  
+  # Define Background Value which should be left out assigning dominant class
+  Background_Value <- 0
+  
+  pic_mask_bg_na <- pic_mask_na
+  pic_mask_bg_na[pic_mask_bg_na == Background_Value] <- NA
+
+  #create Vector-shapes for labelling
+  tile_resolution <- c(0.25) #resolution of tiles in m (working with UTM Coordinates)
+  temp_raster <- rast(ext = ext(pic_mask_na), res = tile_resolution)
+
+  # Convert raster to polygons
+  polygons_from_raster <- as.polygons(temp_raster, values = TRUE)
+
+  # Function Extract the dominant pixel value for each polygon:
+  polygons <- polygons_from_raster
+  raster <- pic_mask_na
+
+  # Initialize a vector to store dominant values
+  dominant_values <- numeric(nrow(polygons_from_raster))
+
+  # Loop through each polygon
+  for (pol in 1:nrow(polygons_from_raster)) {
+    # Extract raster values within the polygon
+    values <- terra::extract(pic_mask_bg_na, polygons_from_raster[pol, ], fun = NULL, cells = TRUE)[, 2]
+    values <- values[!is.na(values)]
+
+    # Calculate the mode (most frequent value)
+    if (length(values) == 0) {
+      dominant_values[pol] <- Background_Value
+    } else {
+      dominant_values[pol] <- as.numeric(names(sort(table(values), decreasing = TRUE)[1]))
+    }
+  }
+
+  # Assign the dominant values back to the polygons
+  polygons_from_raster$dominant_value <- dominant_values
+  terra::crs(polygons_from_raster) <- terra::crs(pic)
+  
+  # Save the polygons to a shapefile
+  terra::writeVector(polygons_from_raster, filename=paste0(
+    "Example_File/Tilewise/",
+    json_data[["images"]][[i]][["file_name"]],".shp"),
+    overwrite=TRUE)
+  
+  # Mask image with annotation based polygon
+  pic_mask_tiles <- pic_mask
+  for (tile in 1:nrow(polygons_from_raster)) {
+  pic_mask_tiles <- terra::mask(pic_mask_tiles, polygons_from_raster[tile, ], inverse=TRUE, 
+                                updatevalue= as.integer(polygons_from_raster$dominant_value[tile])) 
+  }
+  
+  terra::plot(pic_mask_tiles)
+  
+  terra::writeRaster(
+  pic_mask_tiles,
+  filename = paste0("Example_File/Tilewise/", 
+                      json_data[["images"]][[i]][["file_name"]]),
+  overwrite = TRUE
+  )
+
+}
+
+
+
+```
+
