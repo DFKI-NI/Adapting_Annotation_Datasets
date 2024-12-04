@@ -40,7 +40,7 @@ pip install -r requirements.txt
 
 ## 2. Adapting annotation dataset categories. Use segment-based annotations to create other AI employable datasets. (R_Markdown)
 
-Please open the folder [R_Markdown](./Adapting_Categories_-_Translate_to_other_Datasets/R_Markdown/) to see the example files and the R Markdown Script.
+Please open the folder [R_Markdown](./Adapting_Categories_-_Translate_to_other_Datasets/) to see the example files and the R Markdown Script.
 The Script is designed to work with annotation files based (Json COCO format) on multiple images.
 The example file, as extracted in the folder with the script, demonstrates the compiling and execution in general, while providing explanation and visualizations of the performed steps and generated outputs.
 
