@@ -1,14 +1,15 @@
 # Adapting Annotation Datasets - Waste Detection Across Models and Scales
 
 ## Description of the Software
+
 The code presented in this repository is splitted in two sections, seperated in two folders.
 
-1.	Handling different spatial and spectral resolutions of image datasets while maintaining the placement of annotations. (Python)
-2.	Adapting annotation dataset categories. Use segment-based annotations to create other AI employable datasets. (R_Markdown)
+1. Handling different spatial and spectral resolutions of image datasets while maintaining the placement of annotations. (Python)
+2. Adapting annotation dataset categories. Use segment-based annotations to create other AI employable datasets. (R_Markdown)
 
 ## 1. Handling different spatial and spectral resolutions of image datasets while maintaining the placement of annotations. (Python)
 
-First you use the [Harmonize Data Notebook](./Handling_Resolution_-_Maintaining_Annotation/Harmonize_Data_different_resolution_new.ipynb) to create your scaled annotation files. Then you can use the [Combine Data Notebook](./Combine_data_different_resolutions.ipynb) to combine all the single annotation files to one combined annotation file.
+First you use the [Harmonize Data Notebook](./Handling_Resolution_-_Maintaining_Annotation/Harmonize_Data_different_resolution_new.ipynb) to create your scaled annotation files. Then you can use the [Combine Data Notebook](./Handling_Resolution_-_Maintaining_Annotation/Combine_data_different_resolutions.ipynb) to combine all the single annotation files to one combined annotation file.
 
 ### [Harmonize Data](./Handling_Resolution_-_Maintaining_Annotation/Harmonize_Data_different_resolution_new.ipynb)
 
@@ -28,16 +29,24 @@ This Notebook contains two functions:
 
 The code performs a loop through each annotation file. The file name is extracted without the extension. Subsequently, the corresponding scaled files are collated, and the original annotation file is appended to this list. A list of paths to COCO JSON files for merging is then prepared. An output file name is generated based on the current time and the original file name, ensuring that the name is compatible with the file system. The COCO JSON files are then merged and the resulting file is saved to the specified output path. The final step is to display a confirmation message indicating the location where the merged file is saved.
 
+### Requirements
+
+Checkout the [Requirement file](./requirements.txt) in this directory.
+You can use it with the following command:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## 2. Adapting annotation dataset categories. Use segment-based annotations to create other AI employable datasets. (R_Markdown)
 
 Please open the folder [R_Markdown](./Adapting_Categories_-_Translate_to_other_Datasets/R_Markdown/) to see the example files and the R Markdown Script.
-The Script is designed to work with annotion files based (Json COCO format) on multiple images. 
+The Script is designed to work with annotion files based (Json COCO format) on multiple images.
 The example file, as extracted in the folder with the script, demonstrates the compiling and execution in general, while providing explanation and visualizations of the performed steps and generated outputs.
 
 ### [Adapting_and_Translating_Annotation_Datasets.Rmd](./Adapting_Categories_-_Translate_to_other_Datasets/Adapting_and_Translating_Annotation_Datasets.Rmd)
 
-### Dependencies:
+### Dependencies
 
 - R version 4.3.2: GPL (≥ 3)
 - RStudio 2023.12.1: Posit End User License Agreement 
