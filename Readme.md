@@ -31,7 +31,7 @@ The code performs a loop through each annotation file. The file name is extracte
 
 ### Requirements
 
-Checkout the [Requirement file](./requirements.txt) in this directory.
+Checkout the [Requirement file](./Handling_Resolution_-_Maintaining_Annotation\requirements.txt) in this directory.
 You can use it with the following command:
 
 ```bash
