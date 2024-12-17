@@ -6,6 +6,7 @@ The code presented in this repository is divided into two sections, separated in
 
 1. Handling different spatial and spectral resolutions of image datasets while maintaining the placement of annotations. (Python)
 2. Adapting annotation dataset categories. Use segment-based annotations to create other AI employable datasets. (R_Markdown)
+3. Interacting with CVAT (Python)
 
 ## 1. Handling different spatial and spectral resolutions of image datasets while maintaining the placement of annotations. (Python)
 
@@ -31,7 +32,7 @@ The code performs a loop through each annotation file. The file name is extracte
 
 ### Requirements
 
-Checkout the [Requirement file](./Handling_Resolution_-_Maintaining_Annotation\requirements.txt) in this directory.
+Checkout the [Requirement file](./Handling_Resolution_-_Maintaining_Annotation/requirements.txt) in this directory.
 You can use it with the following command:
 
 ```bash
@@ -60,6 +61,41 @@ R Packages
 * sf: GPL-2 | MIT
 * stringr: MIT
 * terra: GPL (≥ 3)
+
+## 3. Interacting with CVAT (Python)
+
+The goal was to upload several files to our on-site CVAT instance without having to do it manually. For our project, we had four people working there, so we have four slots in the scripts, but this number can vary depending on your needs.
+
+We've got three different Python scripts. All of these scripts need to be set up with the same environment settings from the [.env file](./Dataupload_CVAT/.env). One just sends the image folders to your CVAT instance, one assigns tasks to your team members, and one assigns jobs to your team members.
+
+The .env file contains:
+
+* Username
+* Password
+
+### Upload images
+
+With the python script [send_images_to_cvat.py](./Dataupload_CVAT/send_images_to_cvat.py) you can send images to your CVAT instance. The script expects the following parameters in the script:
+
+* taskpreset: the name for your tasks
+* images_folder: where your subfolders are for each task
+* host: The ip and port of your CVAT instance
+* Project_id: The Id of your Project
+* slug: The shortname (slug) of your organization if the project exists in an organization
+
+### Upload images + assign tasks
+
+It's basically the same as in [Upload Images] (#upload-images), but now you can also assign your team members with their usernames and how many tasks you want to give them. The tasks are then automatically assigned while they are uploaded to CVAT.
+The script can be found [here](./Dataupload_CVAT/send_images_and_assignees.py).
+
+### Requirements for CVAT API
+
+Checkout the [Requirement file](./Dataupload_CVAT/requirements.txt) in this directory.
+You can use it with the following command:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## License
 
