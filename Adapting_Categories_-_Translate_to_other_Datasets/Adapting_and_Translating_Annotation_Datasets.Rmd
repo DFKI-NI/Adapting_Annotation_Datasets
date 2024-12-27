@@ -202,16 +202,16 @@ We created a prelimenary version of a LUT to address most common objects and mat
 
 # Cluster Label into Material types Classes ####
 LUT <- read.csv(
-  "2024_11_05_DFKI_Categories_Multilist_LUT.csv",
+  "2024_12_27_DFKI_Categories_Multilist_LUT.csv",
   sep = ";",
   header = T,
   na.strings = c("", "UNKNOWN")
 )
 
-materialtypes <- as.data.frame(LUT$Material.types)
+materialtypes <- as.data.frame(LUT$Material_types)
 # add materialtype ID's
 materialtypes[, 2] <-
-  LUT[, which(colnames(LUT) == "Material.types") + 1]
+  LUT[, which(colnames(LUT) == "Material_types") + 1]
 
 names(materialtypes) <- c("Materialtypes", "IDs")
 
